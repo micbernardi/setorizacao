@@ -342,6 +342,12 @@ tr.bkdrow:hover td{background:var(--panel2)}
 .mfoot{padding:9px 22px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap;flex:none}
 .mfoot select{background:var(--panel2);border:1px solid var(--border2);border-radius:8px;color:var(--txt);padding:6px 10px;font-size:12.5px;max-width:340px}
 .mfoot .cnt{color:var(--mut);font-size:12px}
+.reatModo{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
+.reatModo label{display:flex;align-items:center;gap:6px;cursor:pointer}
+#reatList .reatGrp{margin-bottom:12px}
+#reatList .reatHead{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;margin:4px 0 6px}
+#reatList .reatHead .sp{flex:1}
+#reatList.off{opacity:.45;pointer-events:none}
 .linkbtn{background:transparent;border:0;color:var(--inf);font-size:11.5px;font-weight:600;padding:0}
 .linkbtn:hover{text-decoration:underline}
 .rebar{display:flex;gap:10px;align-items:stretch;margin:12px 0 4px;flex-wrap:wrap}
@@ -554,6 +560,29 @@ body.mapaFull #cenBar{display:none}
     <div class="mbody" style="padding-top:16px">
       <div class="encTop"><input id="encQ" type="text" placeholder="Número ou nome do setor" autocomplete="off"><span id="encCount"></span></div>
       <div id="encList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modalBg" id="reatModalBg">
+  <div class="modal" style="max-width:720px">
+    <div class="mhead">
+      <div><h2 id="reatTitle">Reativar setor</h2><div class="meta">Escolha quais bricks da fila de realocação voltam com o setor. Os que ficarem de fora continuam na fila, no bloco de setores encerrados, para você distribuir depois. Bricks que você já realocou para outros setores não mudam.</div></div>
+      <button class="mclose" onclick="fecharReat()">&times;</button>
+    </div>
+    <div class="mbody" style="padding-top:14px">
+      <div class="reatModo">
+        <label><input type="radio" name="reatModo" value="todos" checked onchange="reatModo(this.value)"> <b>Todos</b> os bricks</label>
+        <label><input type="radio" name="reatModo" value="nenhum" onchange="reatModo(this.value)"> <b>Nenhum</b> (setor volta vazio)</label>
+        <label><input type="radio" name="reatModo" value="escolher" onchange="reatModo(this.value)"> <b>Escolher</b> quais</label>
+      </div>
+      <div id="reatList"></div>
+    </div>
+    <div class="mfoot">
+      <span class="cnt num" id="reatCnt"></span>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="fecharReat()">Cancelar</button>
+      <button class="btn primary" onclick="confirmarReat()">Reativar</button>
     </div>
   </div>
 </div>
@@ -955,6 +984,7 @@ const S={
   teamOv:new Map(),       // sIdx -> nome da equipe simulada
   reativOv:new Map(),     // sIdx (encerrado no estudo) -> equipe onde foi reativado
   desligOv:new Set(),     // sIdx (ativos) encerrados manualmente na simulacao
+  retidoOv:new Set(),     // 'bId|L' de setor reativado que o usuario deixou na fila de realocacao
   teamDel:new Set(),      // nomes originais de distritais do estudo excluidas na simulacao
   period:'mes',
   filesEstudo:null,filesBase:null,
@@ -1213,7 +1243,7 @@ function resetOverrides(){
   mapaGeoEnviada=false;MUNOF=null;
   S.brickOv.clear();S.marcaOv.clear();S.marcaOff.clear();
   S.linhaOv.clear();S.teamOv.clear();S.reativOv.clear();
-  S.desligOv.clear();S.teamDel.clear();S.confOk.clear();
+  S.desligOv.clear();S.teamDel.clear();S.confOk.clear();S.retidoOv.clear();
 }
 function setProg(pct,txt){
   $('progFill').style.width=pct+'%';
@@ -2403,6 +2433,13 @@ function applyStatusOv(){
   }
   S.extintos=[];
   S.setores.forEach((s,i)=>{if(s.extinto)S.extintos.push(i);});
+  // bricks deixados na fila so valem enquanto o setor de origem estiver ativo; se ele
+  // voltar a ser encerrado, os bricks voltam para o grupo normal dele na fila
+  for(const k of[...S.retidoOv]){
+    const[bs,ls]=k.split('|');const b=+bs,L=+ls;
+    const base=S.bricks[b]?(L===0?S.bricks[b].sP:S.bricks[b].sI):-1;
+    if(base<0||!S.setores[base]||S.setores[base].extinto)S.retidoOv.delete(k);
+  }
 }
 function applyTeamOv(){
   applyStatusOv();
@@ -2438,6 +2475,10 @@ function applyTeamOv(){
 function moveTeam(i,name){
   if(!name)return;
   const s=S.setores[i];
+  if(s.extinto&&!S._reativOk){
+    pedirBricksReativ([i],name,()=>{S._reativOk=true;try{moveTeam(i,name);}finally{S._reativOk=false;}});
+    return;
+  }
   const eraEncerrado=s.extinto;
   if(s.extintoBase){
     S.reativOv.set(i,name);
@@ -2449,7 +2490,102 @@ function moveTeam(i,name){
   applyTeamOv();
   renderAll();
   if(modalSector>=0)renderSectorModal();
-  toast(s.num+(eraEncerrado?' reativado na equipe ':' agora na equipe ')+name);
+  const nRet=nRetidos(i);
+  toast(s.num+(eraEncerrado?' reativado na equipe ':' agora na equipe ')+name+(eraEncerrado&&nRet?' · '+nRet+' brick'+(nRet>1?'s ficaram':' ficou')+' na fila':''));
+}
+/* ---------- reativar setor escolhendo os bricks ----------
+   ao reativar um setor encerrado, o usuario decide quais bricks da fila voltam com ele:
+   todos, nenhum ou uma selecao. os que ficam de fora vao para S.retidoOv e continuam na
+   fila de realocacao (agrupados pelo setor de origem), sem creditar venda a ninguem. */
+let reatCtx=null;
+function nRetidos(i){
+  let n=0;
+  for(const k of S.retidoOv){const[bs,ls]=k.split('|');const b=+bs,L=+ls;if((L===0?S.bricks[b].sP:S.bricks[b].sI)===i)n++;}
+  return n;
+}
+function devolverRetidos(i){
+  let n=0;
+  for(const k of[...S.retidoOv]){const[bs,ls]=k.split('|');const b=+bs,L=+ls;if((L===0?S.bricks[b].sP:S.bricks[b].sI)===i){S.retidoOv.delete(k);n++;}}
+  renderAll();
+  if(modalSector>=0)renderSectorModal();
+  toast(n+' brick'+(n>1?'s devolvidos':' devolvido')+' ao setor '+S.setores[i].num);
+}
+function pedirBricksReativ(idxs,name,apply){
+  const pend=(cache&&cache.pend)||pendingBricks();
+  const bs=cache&&cache.bs;
+  const grupos=[];
+  for(const i of idxs){
+    const rows=[];
+    for(let L=0;L<2;L++)for(const r of pend[L])if(r.orig===i&&!r.ret)rows.push({b:r.b,L,v:bs?bs.cur[r.b*2+L]:0});
+    rows.sort((a,b)=>b.v-a.v);
+    if(rows.length)grupos.push({i,rows});
+  }
+  if(!grupos.length){apply();return;}
+  const sel=new Set();
+  for(const g of grupos)for(const r of g.rows)sel.add(r.b+'|'+r.L);
+  reatCtx={grupos,name,apply,sel,modo:'todos'};
+  const nS=idxs.length;
+  $('reatTitle').textContent=nS>1?('Reativar '+nS+' setores em '+name):('Reativar '+S.setores[idxs[0]].num+' - '+(S.setores[idxs[0]].nomeEstudo||S.setores[idxs[0]].nome)+' em '+name);
+  document.querySelectorAll('input[name=reatModo]').forEach(x=>x.checked=x.value==='todos');
+  renderReat();
+  $('reatModalBg').classList.add('open');
+}
+function fecharReat(){$('reatModalBg').classList.remove('open');reatCtx=null;if(modalSector>=0)renderSectorModal();}
+function reatModo(m){
+  if(!reatCtx)return;
+  reatCtx.modo=m;
+  if(m==='todos'||m==='nenhum'){
+    reatCtx.sel.clear();
+    if(m==='todos')for(const g of reatCtx.grupos)for(const r of g.rows)reatCtx.sel.add(r.b+'|'+r.L);
+  }
+  renderReat();
+}
+function reatToggle(k,on){if(!reatCtx)return;if(on)reatCtx.sel.add(k);else reatCtx.sel.delete(k);reatCount();}
+function reatToggleGrp(gi,on){
+  if(!reatCtx)return;
+  for(const r of reatCtx.grupos[gi].rows){const k=r.b+'|'+r.L;if(on)reatCtx.sel.add(k);else reatCtx.sel.delete(k);}
+  renderReat();
+}
+function reatCount(){
+  if(!reatCtx)return;
+  let tot=0,vSel=0,vTot=0;
+  for(const g of reatCtx.grupos)for(const r of g.rows){tot++;vTot+=r.v;if(reatCtx.sel.has(r.b+'|'+r.L))vSel+=r.v;}
+  const n=reatCtx.sel.size;
+  $('reatCnt').innerHTML=`<b>${n}</b> de ${tot} bricks voltam com o setor (${fmtBRL(vSel)} de ${fmtBRL(vTot)}) · ${tot-n} ficam na fila`;
+}
+function renderReat(){
+  const c=reatCtx;if(!c)return;
+  const pd=periodDef(S.period);
+  let html='';
+  c.grupos.forEach((g,gi)=>{
+    const sx=S.setores[g.i];
+    const nSel=g.rows.filter(r=>c.sel.has(r.b+'|'+r.L)).length;
+    html+=`<div class="reatGrp"><div class="reatHead"><span class="num">${sx.num}</span><span>${esc(sx.nomeEstudo||sx.nome)}</span><span class="sp"></span>
+      <button class="linkbtn" onclick="reatToggleGrp(${gi},true)">marcar todos</button><button class="linkbtn" onclick="reatToggleGrp(${gi},false)">desmarcar todos</button></div>
+      <table class="stbl"><thead><tr><th style="width:26px"><input type="checkbox" ${nSel===g.rows.length?'checked':''} onchange="reatToggleGrp(${gi},this.checked)"></th>
+      <th>Brick</th><th>Cidade</th><th>Linha</th><th class="r">${esc(pd&&pd.lbl?pd.lbl:'Venda')}</th></tr></thead><tbody>`;
+    for(const r of g.rows){
+      const k=r.b+'|'+r.L,bi=S.bricks[r.b];
+      html+=`<tr><td><input type="checkbox" ${c.sel.has(k)?'checked':''} onchange="reatToggle('${k}',this.checked)"></td>
+        <td style="font-weight:600">${esc(bi.name)}</td><td style="color:var(--mut)">${esc(bi.city||'')}</td>
+        <td><span class="badge ${r.L===0?'bP':'bI'}">${LNAME[r.L]}</span></td><td class="r num">${fmtBRL(r.v)}</td></tr>`;
+    }
+    html+='</tbody></table></div>';
+  });
+  const list=$('reatList');
+  list.innerHTML=html;
+  list.classList.toggle('off',c.modo!=='escolher');
+  reatCount();
+}
+function confirmarReat(){
+  const c=reatCtx;if(!c)return;
+  for(const g of c.grupos)for(const r of g.rows){
+    const k=r.b+'|'+r.L;
+    if(c.sel.has(k))S.retidoOv.delete(k);else S.retidoOv.add(k);
+  }
+  $('reatModalBg').classList.remove('open');
+  reatCtx=null;
+  c.apply();
 }
 function desligarSetor(i){
   const s=S.setores[i];
@@ -2749,6 +2885,10 @@ function pendingBricks(){
     for(let L=0;L<2;L++){
       const s=sectorOf(b,L);
       // orig -1: brick com vendas na base que a base de bricks nao atribui a ninguem na linha
+      if(s<0&&S.retidoOv.has(b+'|'+L)){
+        out[L].push({b,orig:L===0?S.bricks[b].sP:S.bricks[b].sI,ret:true});
+        continue;
+      }
       if(s<0){
         /* brick sem dono e sem venda nenhuma na linha nao e trabalho de realocacao, e so
            ruido de cadastro: fica de fora da fila e do bloco de encerrados */
@@ -2787,6 +2927,7 @@ function efLinha(sIdx){return S.linhaOv.has(sIdx)?S.linhaOv.get(sIdx):S.setores[
 function sectorOf(bId,L){
   const k=bId+'|'+L;
   if(S.brickOv.has(k))return S.brickOv.get(k);
+  if(S.retidoOv.has(k))return -1; // reativado sem este brick: continua na fila
   return L===0?S.bricks[bId].sP:S.bricks[bId].sI;
 }
 // soma por brick e linha -> {cur,ref} Float64Array(nBricks*2)
@@ -2863,7 +3004,7 @@ function renderSummary(){
      mes no cabecalho da base passa despercebido e so aparece como total baixo */
   const mesesPd=pd.cur.map(i=>S.months[i]).join(', ');
   const lblPd=`<span title="${esc(pd.cur.length+' mes'+(pd.cur.length>1?'es':'')+' da base: '+mesesPd)}" style="border-bottom:1px dotted var(--mut2);cursor:help">${esc(pd.lbl)}</span>`;
-  const nChg=S.brickOv.size+S.marcaOv.size+S.marcaOff.size+S.linhaOv.size+S.teamOv.size+S.reativOv.size+S.desligOv.size+teamEditsCount();
+  const nChg=S.brickOv.size+S.marcaOv.size+S.marcaOff.size+S.linhaOv.size+S.teamOv.size+S.reativOv.size+S.desligOv.size+S.retidoOv.size+teamEditsCount();
   const nPend=cache.pend[0].length+cache.pend[1].length;
   let pendVal=0;
   for(let L=0;L<2;L++)for(const r of cache.pend[L])pendVal+=cache.bs.cur[r.b*2+L];
@@ -2928,7 +3069,7 @@ function pendMovedCount(){
     const p=String(k).split('|');const b=+p[0],L=+p[1];
     if(!S.bricks[b])continue;
     const base=L===0?S.bricks[b].sP:S.bricks[b].sI;
-    if(base>=0&&S.setores[base]&&(S.setores[base].extinto||efLinha(base)!==L))moved++;
+    if(base>=0&&S.setores[base]&&(S.setores[base].extinto||efLinha(base)!==L||S.retidoOv.has(k)))moved++;
   }
   return moved;
 }
@@ -2987,8 +3128,9 @@ function renderPending(pd){
       const ext=o>=0&&s.extinto;
       const nome=o>=0?(s.nomeEstudo||s.nome):s.nome;
       const sim=ext&&!s.extintoBase;
+      const ret=o>=0&&!ext&&rows.length&&rows.every(r=>S.retidoOv.has(r.b+'|'+L));
       const gk=o+'_'+L;
-      const tip=`${esc(nome)} (${LNAME[L]})${ext?(sim?' - encerrado na simulação':' - encerrado na reestruturação'):' - convertido de linha'}\n${it.n?it.n+' bricks a realocar: '+fmtBRL(it.gt):'todos os bricks já realocados'}${ext?'\nMarque a caixa para reativar em lote, ou arraste para uma distrital':''}`;
+      const tip=`${esc(nome)} (${LNAME[L]})${ext?(sim?' - encerrado na simulação':' - encerrado na reestruturação'):(ret?' - reativado; estes bricks ficaram na fila':' - convertido de linha')}\n${it.n?it.n+' bricks a realocar: '+fmtBRL(it.gt):'todos os bricks já realocados'}${ext?'\nMarque a caixa para reativar em lote, ou arraste para uma distrital':''}`;
       // caixa de selecao: alimenta a mesma barra de lote usada nas distritais
       const selBox=ext
         ? `<input type="checkbox" class="pgsel" ${setSel.has(o)?'checked':''} title="Selecionar para reativar numa distrital"
@@ -2996,7 +3138,7 @@ function renderPending(pd){
              onchange="event.stopPropagation();toggleSetorSel(${o},this.checked)">`
         : '<span></span>';
       const head=`${selBox}<i></i><span class="num pgnum">${s.num}</span>
-        <span class="pgname">${esc(nome)}${sim?' <span class="badge bAlt" title="Encerrado na simulação">sim.</span>':''}</span>
+        <span class="pgname">${esc(nome)}${sim?' <span class="badge bAlt" title="Encerrado na simulação">sim.</span>':''}${ret?' <span class="badge bAlt" title="Setor reativado; estes bricks ficaram de fora">reativado</span>':''}</span>
         <span class="badge ${L===0?'bP':'bI'}">${LNAME[L]}</span>`;
       const drag=ext?`draggable="true" ondragstart="dragSetor(event,${o})" ondragend="dragEndSetor(event)"`:'';
       /* o mapa desenha o setor encerrado a partir dos bricks que ainda estao na fila; com
@@ -3083,7 +3225,8 @@ function movePendGroup(o,L,all){
     if(r.orig!==o)continue;
     const k=r.b+'|'+L;
     if(!all&&!pendSel.has(k))continue;
-    S.brickOv.set(k,dest);
+    if(r.ret&&dest===r.orig){S.retidoOv.delete(k);S.brickOv.delete(k);}
+    else S.brickOv.set(k,dest);
     pendSel.delete(k);
     n++;
   }
@@ -3223,7 +3366,20 @@ function moveSetoresSel(){
   const name=sel?sel.value:'';
   if(!name){toast('Escolha a distrital de destino');return;}
   if(!setSel.size){toast('Selecione ao menos um setor');return;}
+  if(!S._reativOk){
+    const enc=[...setSel].filter(i=>S.setores[i]&&S.setores[i].extinto);
+    if(enc.length){
+      const snap=[...setSel];
+      pedirBricksReativ(enc,name,()=>{
+        S._reativOk=true;
+        try{setSel=new Set(snap);if($('selBarDest'))$('selBarDest').value=name;moveSetoresSel();}
+        finally{S._reativOk=false;}
+      });
+      return;
+    }
+  }
   let n=0,nRe=0;
+  const alvosLote=[];
   for(const i of setSel){
     const s=S.setores[i];
     const cur=(S.teams.find(t=>t.sIdxs.includes(i))||{}).name;
@@ -3235,14 +3391,15 @@ function moveSetoresSel(){
       if(s.teamOrig===name)S.teamOv.delete(i);
       else S.teamOv.set(i,name);
     }
-    n++;if(eraEnc)nRe++;
+    n++;if(eraEnc){nRe++;alvosLote.push(i);}
   }
   setSel.clear();
   applyTeamOv();
   renderAll();
   if(modalSector>=0)renderSectorModal();
   const verbo=nRe===n?('reativado'+(n>1?'s':'')+' em '):('movido'+(n>1?'s':'')+' para ');
-  toast(n?n+' setor'+(n>1?'es ':' ')+verbo+name:'Os setores selecionados já estavam nessa distrital');
+  let nRetLote=0;for(const i of alvosLote)nRetLote+=nRetidos(i);
+  toast(n?n+' setor'+(n>1?'es ':' ')+verbo+name+(nRetLote?' · '+nRetLote+' brick'+(nRetLote>1?'s ficaram':' ficou')+' na fila':''):'Os setores selecionados já estavam nessa distrital');
 }
 // ordenacao da tabela de marcas (clique no cabecalho)
 let marcaSort={k:'cur',d:-1};
@@ -4437,7 +4594,7 @@ function reAplicarReforco(){
   const L=efLinha(modalSector);let n=0;
   for(const b of reSel){
     const orig=L===0?S.bricks[b].sP:S.bricks[b].sI;
-    if(orig===modalSector)S.brickOv.delete(b+'|'+L);
+    if(orig===modalSector){S.brickOv.delete(b+'|'+L);S.retidoOv.delete(b+'|'+L);}
     else S.brickOv.set(b+'|'+L,modalSector);
     n++;
   }
@@ -4450,7 +4607,7 @@ function reAplicarDistribuicao(){
   const L=efLinha(modalSector);let n=0;
   for(const[b,dest]of reDest){
     const orig=L===0?S.bricks[b].sP:S.bricks[b].sI;
-    if(orig===dest)S.brickOv.delete(b+'|'+L);
+    if(orig===dest){S.brickOv.delete(b+'|'+L);S.retidoOv.delete(b+'|'+L);}
     else S.brickOv.set(b+'|'+L,dest);
     n++;
   }
@@ -4820,7 +4977,7 @@ function moveSelected(){
   for(const b of modalSel){
     const orig=L===0?S.bricks[b].sP:S.bricks[b].sI;
     const k=b+'|'+L;
-    if(orig===dest)S.brickOv.delete(k);
+    if(orig===dest){S.brickOv.delete(k);S.retidoOv.delete(k);}
     else S.brickOv.set(k,dest);
     n++;
   }
@@ -4998,6 +5155,21 @@ function openChanges(){
       <span style="flex:1"><b>${sx.num} - ${esc(sx.nomeEstudo||sx.nome)}</b><br><span style="color:var(--mut);font-size:11.5px">setor encerrado no estudo, reativado na equipe ${esc(name)}</span></span>
       <button class="linkbtn" onclick="undoStatus(${i});openChanges()">desfazer</button></li>`;
   }
+  {
+    const porSetor=new Map();
+    for(const k of S.retidoOv){
+      const[bs,ls]=k.split('|');const b=+bs,L=+ls;
+      const o=L===0?S.bricks[b].sP:S.bricks[b].sI;
+      if(o<0)continue;
+      porSetor.set(o,(porSetor.get(o)||0)+1);
+    }
+    for(const[i,c]of porSetor){
+      const sx=S.setores[i];
+      html+=`<li><span class="badge bAlt">FILA</span>
+      <span style="flex:1"><b>${sx.num} - ${esc(sx.nomeEstudo||sx.nome)}</b><br><span style="color:var(--mut);font-size:11.5px">reativado sem ${c} brick${c>1?'s':''}, que ficaram na fila de realocação</span></span>
+      <button class="linkbtn" onclick="devolverRetidos(${i});openChanges()">devolver ao setor</button></li>`;
+    }
+  }
   for(const i of S.desligOv){
     const sx=S.setores[i];
     html+=`<li><span class="badge bZero">SETOR</span>
@@ -5061,7 +5233,7 @@ document.querySelectorAll('#tabs button').forEach(b=>{
 });
 /* volta a simulacao para a configuracao original da base, sem tocar na lista de cenarios */
 function limparSimulacao(){
-  S.brickOv.clear();S.marcaOv.clear();S.marcaOff.clear();S.linhaOv.clear();S.teamOv.clear();S.reativOv.clear();S.desligOv.clear();S.confOk.clear();
+  S.brickOv.clear();S.marcaOv.clear();S.marcaOff.clear();S.linhaOv.clear();S.teamOv.clear();S.reativOv.clear();S.desligOv.clear();S.confOk.clear();S.retidoOv.clear();
   // restaurar estrutura original das distritais (nomes, criadas, excluidas)
   if(S.teamsOrig){
     S.teamsBase=S.teamsOrig.map(t=>({name:t.name,num:t.num,orig:t.orig,added:false,sIdxs:t.sIdxs.slice()}));
@@ -5072,7 +5244,7 @@ function limparSimulacao(){
   applyDefaultOff();
 }
 function simVazia(){
-  return !S.brickOv.size&&!S.marcaOv.size&&!S.linhaOv.size&&!S.teamOv.size&&!S.reativOv.size&&!S.desligOv.size&&!teamEditsCount();
+  return !S.brickOv.size&&!S.marcaOv.size&&!S.linhaOv.size&&!S.teamOv.size&&!S.reativOv.size&&!S.desligOv.size&&!S.retidoOv.size&&!teamEditsCount();
 }
 $('btnWipe').onclick=limparTudo;
 $('btnReset').onclick=()=>{
@@ -5155,7 +5327,9 @@ function snapshotState(){
   // conflitos ja revisados: guarda a assinatura, para o aviso voltar se o conflito mudar
   const ck=[];
   for(const[i,sig]of S.confOk)ck.push([S.setores[i].num,sig]);
-  return{mb,mo,mx,sl,tv,rv,dg,tn,ta,td,ck};
+  const rt=[];
+  for(const k of S.retidoOv){const[bStr,lStr]=k.split('|');rt.push([S.bricks[+bStr].name,LKEY[+lStr]]);}
+  return{mb,mo,mx,sl,tv,rv,dg,tn,ta,td,ck,rt};
 }
 function saveLS(){
   try{localStorage.setItem(LS_KEY,JSON.stringify(snapshotState()));}catch(e){}
@@ -5215,7 +5389,12 @@ function applySnapshot(saved,silent){
     if(i===undefined||S.setores[i].extintoBase)continue;
     S.desligOv.add(i);S.teamOv.delete(i);n++;
   }
-  if(S.teamOv.size||S.reativOv.size||S.desligOv.size||teamStruct)applyTeamOv();
+  for(const[bn,lk]of(saved.rt||[])){
+    const b=brickByName.get(bn);
+    if(b===undefined)continue;
+    S.retidoOv.add(b+'|'+(lk==='P'?0:1));n++;
+  }
+  if(S.teamOv.size||S.reativOv.size||S.desligOv.size||S.retidoOv.size||teamStruct)applyTeamOv();
   for(const[bn,lk,destNum]of(saved.mb||[])){
     const b=brickByName.get(bn),dest=setorByNum.get(destNum);
     const L=lk==='P'?0:1;
