@@ -393,7 +393,7 @@ tr.bkdrow:hover td{background:var(--panel2)}
 #cenBar{max-width:1500px;margin:0 auto;padding:12px 20px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 body.mapaFull #cenBar{display:none}
 #cenBar .lb{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut2);font-weight:600;margin-right:2px}
-.cenchip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border2);border-radius:999px;padding:6px 6px 6px 13px;font-size:12.5px;cursor:pointer;transition:border-color .15s,background .15s;max-width:280px}
+.cenchip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border2);border-radius:999px;padding:6px 6px 6px 13px;font-size:12.5px;cursor:pointer;transition:border-color .15s,background .15s;max-width:460px}
 .cenchip:hover{border-color:var(--mut2)}
 .cenchip .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cenchip .dt{color:var(--mut2);font-size:11px;white-space:nowrap}
@@ -5584,7 +5584,10 @@ async function importarCenarioArquivo(f){
     const dados=pack&&pack.dados?pack.dados:pack;
     if(!dados||typeof dados!=='object'||!('mb'in dados))throw new Error('Este arquivo não parece ser um cenário do simulador.');
     const peso=cenPeso(dados);
-    const nome=nomeCenarioLivre((pack&&pack.nome)||f.name.replace(/\.(xlsx|json)$/i,''));
+    /* o chip leva o nome do arquivo importado (sem a extensao), e nao o nome gravado dentro
+       do pacote: esse nome interno acumulava sufixos "(2) (3)..." a cada reimportacao */
+    const nomeArq=f.name.replace(/\.(xlsx|xlsm|xls|json)$/i,'').trim();
+    const nome=nomeCenarioLivre(nomeArq||(pack&&pack.nome));
     /* aviso so quando ha trabalho na tela que nao esta guardado em nenhum chip: o cenario
        importado vira mais um chip, entao os que ja estavam salvos nao correm risco */
     const aviso=cenSujo()
